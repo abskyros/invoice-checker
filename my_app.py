@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # --- ΡΥΘΜΙΣΕΙΣ ---
 EMAIL_USER = "abf.skyros@gmail.com"
-EMAIL_PASS = "awsh wbem jzjx jqic" 
+EMAIL_PASS = st.secrets["EMAIL_PASS"] 
 SENDER_EMAIL = "Notifications@WeDoConnect.com"
 
 # Ρύθμιση της σελίδας
@@ -133,3 +133,4 @@ if not df.empty:
         col3.metric("ΚΑΘΑΡΟ ΣΥΝΟΛΟ", f"{final_total:.2f} €", delta_color="normal")
 else:
     st.error("Δεν βρέθηκαν δεδομένα.")
+
