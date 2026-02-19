@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # --- ΡΥΘΜΙΣΕΙΣ ---
 EMAIL_USER = "abf.skyros@gmail.com"
-EMAIL_PASS = st.secrets["EMAIL_PASS"] # Παίρνει τον κωδικό με ασφάλεια
+EMAIL_PASS = st.secrets["EMAIL_PASS"] 
 SENDER_EMAIL = "Notifications@WeDoConnect.com"
 
 st.set_page_config(page_title="Έλεγχος Τιμολογίων", layout="centered", page_icon="📊")
@@ -65,21 +65,15 @@ def load_data():
                                     df[col_value] = df[col_value].astype(str).str.replace('€', '').str.replace(',', '.')
                                 df[col_value] = pd.to_numeric(df[col_value], errors='coerce').fillna(0)
                                 
-                                # Δημιουργία στήλης καθαρής αξίας (Αρνητικά τα πιστωτικά)
-                                df['ΚΑΘΑΡΗ ΑΞΙΑ'] = df.apply(
-                                    lambda row: -row[col_value] if "ΠΙΣΤΩΤΙΚΟ" in str(row[col_type]).upper() else row[col_value], 
-                                    axis=1
-                                )
-                                
                                 all_data = pd.concat([all_data, df], ignore_index=True)
         
-        status_text.empty() # Καθαρίζει το μήνυμα φόρτωσης
+        status_text.empty() 
         return all_data
     except Exception as e:
         status_text.error(f"Σφάλμα: {e}")
         return pd.DataFrame()
 
-# --- G UI & ΣΧΕΔΙΑΣΜΟΣ ---
+# --- GUI & ΣΧΕΔΙΑΣΜΟΣ ---
 st.title("📊 Πίνακας Ελέγχου Παραστατικών")
 
 col1, col2 = st.columns([3, 1])
@@ -90,7 +84,6 @@ with col2:
 df = load_data()
 
 if not df.empty:
-    # Δημιουργία Καρτελών (Tabs)
     tab_week, tab_month = st.tabs(["📅 Ανά Εβδομάδα", "📆 Ανά Μήνα"])
     
     # --- ΚΑΡΤΕΛΑ 1: ΕΒΔΟΜΑΔΑ ---
@@ -106,7 +99,7 @@ if not df.empty:
         weekly_df = df.loc[mask_week]
 
         if weekly_df.empty:
-            st.warning("Δεν βρέθηκαν παραστατικά.")
+            st.warning("Δεν βρέθηκαν παραστατικά για αυτή την εβδομάδα.")
         else:
             invoices = weekly_df[~weekly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
             credits = weekly_df[weekly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
@@ -114,20 +107,15 @@ if not df.empty:
             c1, c2, c3 = st.columns(3)
             c1.metric("Τιμολόγια", f"{invoices:.2f} €")
             c2.metric("Πιστωτικά", f"-{credits:.2f} €")
-            c3.metric("ΚΑΘΑΡΟ", f"{(invoices - credits):.2f} €", delta_color="normal")
+            c3.metric("ΚΑΘΑΡΟ ΣΥΝΟΛΟ", f"{(invoices - credits):.2f} €", delta_color="normal")
             
-            # Γράφημα ανά ημέρα
-            st.markdown("##### Εξέλιξη μέσα στην εβδομάδα")
-            daily_chart_data = weekly_df.groupby(weekly_df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.date)['ΚΑΘΑΡΗ ΑΞΙΑ'].sum()
-            st.bar_chart(daily_chart_data)
-            
+            st.write("---")
             st.dataframe(weekly_df[['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']].style.format({"ΣΥΝΟΛΙΚΗ ΑΞΙΑ": "{:.2f} €"}), use_container_width=True, hide_index=True)
 
     # --- ΚΑΡΤΕΛΑ 2: ΜΗΝΑΣ ---
     with tab_month:
         st.subheader("Συγκεντρωτικά Μήνα")
         
-        # Φίλτρα Μήνα και Έτους
         col_m1, col_m2 = st.columns(2)
         months = ["Ιανουάριος", "Φεβρουάριος", "Μάρτιος", "Απρίλιος", "Μάιος", "Ιούνιος", "Ιούλιος", "Αύγουστος", "Σεπτέμβριος", "Οκτώβριος", "Νοέμβριος", "Δεκέμβριος"]
         
@@ -138,12 +126,10 @@ if not df.empty:
             sel_month_name = st.selectbox("Μήνας", months, index=current_month-1)
             sel_month = months.index(sel_month_name) + 1
         with col_m2:
-            # Βρίσκει τα έτη που υπάρχουν στα δεδομένα
             available_years = df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.year.dropna().unique()
             if current_year not in available_years: available_years = list(available_years) + [current_year]
             sel_year = st.selectbox("Έτος", sorted(available_years, reverse=True))
 
-        # Φιλτράρισμα βάσει μήνα/έτους
         mask_month = (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.month == sel_month) & (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.year == sel_year)
         monthly_df = df.loc[mask_month]
 
@@ -158,10 +144,7 @@ if not df.empty:
             c2.metric("Πιστωτικά", f"-{credits_m:.2f} €")
             c3.metric("ΣΥΝΟΛΟ ΜΗΝΑ", f"{(invoices_m - credits_m):.2f} €", delta_color="normal")
             
-            st.markdown("##### Συνολική Αξία ανά Ημέρα του Μήνα")
-            monthly_chart_data = monthly_df.groupby(monthly_df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.date)['ΚΑΘΑΡΗ ΑΞΙΑ'].sum()
-            st.bar_chart(monthly_chart_data)
-
+            st.write("---")
             # Κουμπί εξαγωγής δεδομένων
             csv = monthly_df[['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']].to_csv(index=False).encode('utf-8-sig')
             st.download_button(
