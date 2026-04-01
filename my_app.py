@@ -6,10 +6,11 @@ from datetime import datetime, timedelta
 
 # --- ΡΥΘΜΙΣΕΙΣ ---
 EMAIL_USER = "abf.skyros@gmail.com"
-EMAIL_PASS = st.secrets["EMAIL_PASS"] 
+EMAIL_PASS = "awsh wbem jzjx jqic" 
 SENDER_EMAIL = "Notifications@WeDoConnect.com"
 
-st.set_page_config(page_title="Έλεγχος Τιμολογίων", layout="centered", page_icon="📊")
+# Ρύθμιση της σελίδας
+st.set_page_config(page_title="Έλεγχος Τιμολογίων", layout="centered")
 
 def get_week_range(date_obj):
     start_of_week = date_obj - timedelta(days=date_obj.weekday()) 
@@ -39,23 +40,26 @@ def find_header_and_load(file_content, is_excel=False):
         return df_raw.iloc[header_row_index + 1:].reset_index(drop=True)
     except: return None
 
+# Cache για να μην κατεβάζει τα emails κάθε φορά που πατάς ένα κουμπί, 
+# αλλά μόνο όταν πατάς "Ανανέωση Δεδομένων"
 @st.cache_data(ttl=600) 
 def load_data():
     all_data = pd.DataFrame()
     status_text = st.empty()
-    status_text.info("⏳ Λήψη νέων δεδομένων από το Email...")
+    status_text.text("⏳ Σύνδεση στο Email και λήψη δεδομένων...")
     
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            for msg in mailbox.fetch(AND(from_=SENDER_EMAIL), limit=200, reverse=True):
+            # Ψάχνουμε τα τελευταία 40 emails
+            for msg in mailbox.fetch(AND(from_=SENDER_EMAIL), limit=40, reverse=True):
                 for att in msg.attachments:
                     if att.filename.endswith(('.xlsx', '.csv')):
                         df = find_header_and_load(att.payload, att.filename.endswith('.xlsx'))
                         if df is not None:
+                            # Καθαρισμός
                             df.columns = df.columns.astype(str).str.strip()
                             col_date = 'ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'
                             col_value = 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ'
-                            col_type = 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'
                             
                             if col_date in df.columns and col_value in df.columns:
                                 df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
@@ -67,91 +71,65 @@ def load_data():
                                 
                                 all_data = pd.concat([all_data, df], ignore_index=True)
         
-        status_text.empty() 
+        status_text.text("✅ Τα δεδομένα φορτώθηκαν!")
         return all_data
     except Exception as e:
         status_text.error(f"Σφάλμα: {e}")
         return pd.DataFrame()
 
-# --- GUI & ΣΧΕΔΙΑΣΜΟΣ ---
-st.title("📊 Πίνακας Ελέγχου Παραστατικών")
+# --- ΤΟ ΚΥΡΙΩΣ ΠΡΟΓΡΑΜΜΑ (UI) ---
+st.title("📊 Έλεγχος Τιμολογίων")
 
-col1, col2 = st.columns([3, 1])
-with col2:
-    if st.button("🔄 Ανανέωση", use_container_width=True):
-        st.cache_data.clear()
+if st.button("🔄 Ανανέωση Δεδομένων"):
+    st.cache_data.clear()
 
 df = load_data()
 
 if not df.empty:
-    tab_week, tab_month = st.tabs(["📅 Ανά Εβδομάδα", "📆 Ανά Μήνα"])
+    st.divider()
     
-    # --- ΚΑΡΤΕΛΑ 1: ΕΒΔΟΜΑΔΑ ---
-    with tab_week:
-        st.subheader("Στοιχεία Εβδομάδας")
-        selected_date = st.date_input("Επίλεξε ημερομηνία", datetime.now(), key="week_date")
-        target_date = datetime.combine(selected_date, datetime.min.time())
-        start_week, end_week = get_week_range(target_date)
+    # Επιλογή Ημερομηνίας με ωραίο ημερολόγιο
+    selected_date = st.date_input("Επίλεξε μια ημερομηνία μέσα στην εβδομάδα που σε ενδιαφέρει:", datetime.now())
+    
+    # Μετατροπή date σε datetime για τους υπολογισμούς
+    target_date = datetime.combine(selected_date, datetime.min.time())
+    
+    start_week, end_week = get_week_range(target_date)
+    start_week = start_week.replace(hour=0, minute=0, second=0)
+    end_week = end_week.replace(hour=23, minute=59, second=59)
+    
+    st.subheader(f"📅 Εβδομάδα: {start_week.strftime('%d/%m')} - {end_week.strftime('%d/%m/%Y')}")
+
+    # Φιλτράρισμα
+    mask = (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'] >= start_week) & (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'] <= end_week)
+    weekly_df = df.loc[mask]
+
+    if weekly_df.empty:
+        st.warning("Δεν βρέθηκαν παραστατικά για αυτή την εβδομάδα.")
+    else:
+        # Υπολογισμοί
+        total_invoices = 0.0
+        total_credits = 0.0
         
-        st.markdown(f"**Περίοδος:** {start_week.strftime('%d/%m')} έως {end_week.strftime('%d/%m/%Y')}")
-
-        mask_week = (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'] >= start_week) & (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'] <= end_week)
-        weekly_df = df.loc[mask_week]
-
-        if weekly_df.empty:
-            st.warning("Δεν βρέθηκαν παραστατικά για αυτή την εβδομάδα.")
-        else:
-            invoices = weekly_df[~weekly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            credits = weekly_df[weekly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Τιμολόγια", f"{invoices:.2f} €")
-            c2.metric("Πιστωτικά", f"-{credits:.2f} €")
-            c3.metric("ΚΑΘΑΡΟ ΣΥΝΟΛΟ", f"{(invoices - credits):.2f} €", delta_color="normal")
-            
-            st.write("---")
-            st.dataframe(weekly_df[['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']].style.format({"ΣΥΝΟΛΙΚΗ ΑΞΙΑ": "{:.2f} €"}), use_container_width=True, hide_index=True)
-
-    # --- ΚΑΡΤΕΛΑ 2: ΜΗΝΑΣ ---
-    with tab_month:
-        st.subheader("Συγκεντρωτικά Μήνα")
+        # Ομαδοποίηση για προβολή
+        sums = weekly_df.groupby('ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ')['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum().reset_index()
         
-        col_m1, col_m2 = st.columns(2)
-        months = ["Ιανουάριος", "Φεβρουάριος", "Μάρτιος", "Απρίλιος", "Μάιος", "Ιούνιος", "Ιούλιος", "Αύγουστος", "Σεπτέμβριος", "Οκτώβριος", "Νοέμβριος", "Δεκέμβριος"]
-        
-        current_month = datetime.now().month
-        current_year = datetime.now().year
-        
-        with col_m1:
-            sel_month_name = st.selectbox("Μήνας", months, index=current_month-1)
-            sel_month = months.index(sel_month_name) + 1
-        with col_m2:
-            available_years = df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.year.dropna().unique()
-            if current_year not in available_years: available_years = list(available_years) + [current_year]
-            sel_year = st.selectbox("Έτος", sorted(available_years, reverse=True))
+        st.write("Αναλυτικά:")
+        # Εμφάνιση πίνακα
+        st.dataframe(sums.style.format({"ΣΥΝΟΛΙΚΗ ΑΞΙΑ": "{:.2f} €"}), use_container_width=True)
 
-        mask_month = (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.month == sel_month) & (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.year == sel_year)
-        monthly_df = df.loc[mask_month]
+        for _, row in sums.iterrows():
+            if "ΠΙΣΤΩΤΙΚΟ" in row['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].upper():
+                total_credits += row['ΣΥΝΟΛΙΚΗ ΑΞΙΑ']
+            else:
+                total_invoices += row['ΣΥΝΟΛΙΚΗ ΑΞΙΑ']
 
-        if monthly_df.empty:
-            st.warning(f"Δεν υπάρχουν δεδομένα για {sel_month_name} {sel_year}.")
-        else:
-            invoices_m = monthly_df[~monthly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            credits_m = monthly_df[monthly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Τιμολόγια", f"{invoices_m:.2f} €")
-            c2.metric("Πιστωτικά", f"-{credits_m:.2f} €")
-            c3.metric("ΣΥΝΟΛΟ ΜΗΝΑ", f"{(invoices_m - credits_m):.2f} €", delta_color="normal")
-            
-            st.write("---")
-            # Κουμπί εξαγωγής δεδομένων
-            csv = monthly_df[['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']].to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 Κατέβασμα Μήνα σε CSV",
-                data=csv,
-                file_name=f"invoices_{sel_month}_{sel_year}.csv",
-                mime="text/csv",
-            )
+        final_total = total_invoices - total_credits
+
+        st.divider()
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Τιμολόγια", f"{total_invoices:.2f} €")
+        col2.metric("Πιστωτικά", f"-{total_credits:.2f} €")
+        col3.metric("ΚΑΘΑΡΟ ΣΥΝΟΛΟ", f"{final_total:.2f} €", delta_color="normal")
 else:
-    st.info("Δεν βρέθηκαν καθόλου δεδομένα. Πάτα Ανανέωση.")
+    st.error("Δεν βρέθηκαν δεδομένα.")
