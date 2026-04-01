@@ -47,7 +47,7 @@ def load_data():
     
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            for msg in mailbox.fetch(AND(from_=SENDER_EMAIL), limit=50, reverse=True):
+            for msg in mailbox.fetch(AND(from_=SENDER_EMAIL), limit=200, reverse=True):
                 for att in msg.attachments:
                     if att.filename.endswith(('.xlsx', '.csv')):
                         df = find_header_and_load(att.payload, att.filename.endswith('.xlsx'))
