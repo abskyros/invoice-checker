@@ -7,172 +7,152 @@ from datetime import datetime, timedelta
 # --- ΡΥΘΜΙΣΕΙΣ ---
 EMAIL_USER = "abf.skyros@gmail.com"
 EMAIL_PASS = st.secrets["EMAIL_PASS"] 
-SENDER_EMAIL = "Notifications@WeDoConnect.com" # Επαναφορά στο ακριβές email για σίγουρη αναζήτηση
+SENDER_EMAIL = "Notifications@WeDoConnect.com"
 
-st.set_page_config(page_title="Έλεγχος Τιμολογίων", layout="centered", page_icon="📊")
+st.set_page_config(page_title="Έλεγχος Τιμολογίων", layout="wide", page_icon="📊")
 
 def get_week_range(date_obj):
     start_of_week = date_obj - timedelta(days=date_obj.weekday()) 
     end_of_week = start_of_week + timedelta(days=6)
     return start_of_week, end_of_week
 
-def find_header_and_load(file_content, is_excel=False):
-    """Ψάχνει να βρει τη σωστή γραμμή με τους τίτλους μέσα στο αρχείο"""
+def find_header_and_load(file_content, filename):
+    """Resilient συναρτηση για διαβασμα Excel/CSV με κενες γραμμες/στηλες"""
     try:
+        is_excel = filename.endswith(('.xlsx', '.xls'))
         if is_excel:
             df_raw = pd.read_excel(io.BytesIO(file_content), header=None)
         else:
+            # Δοκιμη με διαφορους διαχωριστες για CSV
             try:
-                df_raw = pd.read_csv(io.BytesIO(file_content), header=None, sep=',')
+                df_raw = pd.read_csv(io.BytesIO(file_content), header=None, sep=None, engine='python')
             except:
-                df_raw = pd.read_csv(io.BytesIO(file_content), header=None, encoding='cp1253', sep=';')
+                df_raw = pd.read_csv(io.BytesIO(file_content), header=None, encoding='cp1253', sep=None, engine='python')
 
+        # Εντοπισμος γραμμης τιτλων
         header_row_index = -1
-        # Ψάχνουμε τις πρώτες 40 γραμμές για τις λέξεις-κλειδιά
         for i in range(min(40, len(df_raw))):
-            row_str = " ".join(df_raw.iloc[i].astype(str).values).upper()
+            row_values = [str(x).upper() for x in df_raw.iloc[i].values if pd.notna(x)]
+            row_str = " ".join(row_values)
             if "ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str:
                 header_row_index = i
                 break
         
-        if header_row_index == -1: 
-            return None
+        if header_row_index == -1: return None
             
-        df_raw.columns = df_raw.iloc[header_row_index]
-        df_final = df_raw.iloc[header_row_index + 1:].reset_index(drop=True)
-        return df_final
-    except: 
+        # Καθαρισμος στηλων και δεδομενων
+        df = df_raw.iloc[header_row_index + 1:].copy()
+        headers = [str(h).strip().upper() for h in df_raw.iloc[header_row_index]]
+        df.columns = headers
+        
+        # Αφαιρεση στηλων που ειναι 'NAN' ή κενες
+        df = df.loc[:, df.columns.notna()]
+        df = df.loc[:, ~df.columns.str.contains('NAN|UNNAMED', case=False)]
+        
+        return df.reset_index(drop=True)
+    except:
         return None
 
-@st.cache_data(ttl=600) 
+@st.cache_data(ttl=300) 
 def load_data():
     all_data = pd.DataFrame()
-    status_text = st.empty()
-    status_text.info("⏳ Λήψη και σάρωση δεδομένων από το Email...")
+    log_area = st.empty()
+    log_area.info("⏳ Σύνδεση στο email...")
     
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            # Ψάχνουμε τα τελευταία 100 emails με βάση το ακριβές email
-            for msg in mailbox.fetch(AND(from_=SENDER_EMAIL), limit=100, reverse=True):
-                for att in msg.attachments:
-                    if att.filename.endswith(('.xlsx', '.csv', '.xls')):
-                        df = find_header_and_load(att.payload, is_excel=not att.filename.endswith('.csv'))
-                        
-                        if df is not None:
-                            # Καθαρισμός στηλών (αφαίρεση κενών κλπ)
-                            df.columns = df.columns.astype(str).str.strip().str.upper()
-                            
-                            # Ψάχνουμε τις σωστές στήλες ακόμα κι αν τις έχουν ονομάσει λίγο διαφορετικά
-                            col_date = next((c for c in df.columns if 'ΗΜΕΡΟΜΗΝΙΑ' in c), None)
-                            col_value = next((c for c in df.columns if 'ΑΞΙΑ' in c or 'ΣΥΝΟΛΟ' in c), None)
-                            col_type = next((c for c in df.columns if 'ΤΥΠΟΣ' in c), None)
-                            
-                            if col_date and col_value and col_type:
-                                df_clean = df[[col_date, col_type, col_value]].copy()
+            # Ψαχνουμε τα τελευταια 150 emails (πιο σιγουρο)
+            messages = list(mailbox.fetch(AND(all=True), limit=150, reverse=True))
+            log_area.info(f"🔎 Έλεγχος {len(messages)} μηνυμάτων για τιμολόγια...")
+            
+            found_files = 0
+            for msg in messages:
+                # Φιλτρο αποστολεα (case-insensitive)
+                if SENDER_EMAIL.lower() in msg.from_.lower():
+                    for att in msg.attachments:
+                        if att.filename.lower().endswith(('.xlsx', '.csv', '.xls')):
+                            df = find_header_and_load(att.payload, att.filename)
+                            if df is not None:
+                                # Εντοπισμος στηλων με μερικη ταιριασμα (πιο εξυπνο)
+                                col_date = next((c for c in df.columns if 'ΗΜΕΡΟΜΗΝΙΑ' in c), None)
+                                col_value = next((c for c in df.columns if 'ΑΞΙΑ' in c or 'ΣΥΝΟΛΟ' in c), None)
+                                col_type = next((c for c in df.columns if 'ΤΥΠΟΣ' in c), None)
                                 
-                                # Μετατροπή Ημερομηνίας
-                                df_clean[col_date] = pd.to_datetime(df_clean[col_date], errors='coerce')
-                                df_clean = df_clean.dropna(subset=[col_date])
-                                
-                                # Μετατροπή Ποσού
-                                if df_clean[col_value].dtype == object:
-                                    df_clean[col_value] = df_clean[col_value].astype(str).str.replace('€', '').str.replace(',', '.').str.strip()
-                                df_clean[col_value] = pd.to_numeric(df_clean[col_value], errors='coerce').fillna(0)
-                                
-                                # Μετονομασία για να είναι στάνταρ στη συνέχεια
-                                df_clean.columns = ['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']
-                                
-                                all_data = pd.concat([all_data, df_clean], ignore_index=True)
+                                if col_date and col_value and col_type:
+                                    temp_df = df[[col_date, col_type, col_value]].copy()
+                                    temp_df.columns = ['DATE', 'TYPE', 'VALUE']
+                                    
+                                    # Καθαρισμος Ημερομηνιας
+                                    temp_df['DATE'] = pd.to_datetime(temp_df['DATE'], errors='coerce')
+                                    # Καθαρισμος Ποσου
+                                    if temp_df['VALUE'].dtype == object:
+                                        temp_df['VALUE'] = temp_df['VALUE'].astype(str).str.replace('€', '').str.replace(',', '.').str.strip()
+                                    temp_df['VALUE'] = pd.to_numeric(temp_df['VALUE'], errors='coerce').fillna(0)
+                                    
+                                    all_data = pd.concat([all_data, temp_df.dropna(subset=['DATE'])], ignore_index=True)
+                                    found_files += 1
+            
+            if found_files > 0:
+                log_area.success(f"✅ Βρέθηκαν και αναλύθηκαν {found_files} αρχεία!")
+            else:
+                log_area.warning("⚠️ Συνδέθηκε, αλλά δεν βρέθηκαν αρχεία τιμολογίων στα τελευταία emails.")
         
-        status_text.empty() 
         return all_data
     except Exception as e:
-        status_text.error(f"Σφάλμα κατά τη σύνδεση: {e}")
+        log_area.error(f"❌ Σφάλμα σύνδεσης: {e}")
         return pd.DataFrame()
 
-# --- GUI & ΣΧΕΔΙΑΣΜΟΣ ---
-st.title("📊 Πίνακας Ελέγχου Παραστατικών")
+# --- ΕΜΦΑΝΙΣΗ ---
+st.title("📊 Σύστημα Ελέγχου Παραστατικών")
 
-col1, col2 = st.columns([3, 1])
-with col2:
-    if st.button("🔄 Ανανέωση Δεδομένων", use_container_width=True):
-        st.cache_data.clear()
-
-tab_week, tab_month = st.tabs(["📅 Ανά Εβδομάδα", "📆 Ανά Μήνα"])
+if st.button("🔄 Φόρτωση & Ανανέωση Δεδομένων"):
+    st.cache_data.clear()
+    st.rerun()
 
 df = load_data()
 
-# --- ΚΑΡΤΕΛΑ 1: ΕΒΔΟΜΑΔΑ ---
-with tab_week:
-    st.subheader("Στοιχεία Εβδομάδας")
-    selected_date = st.date_input("Επίλεξε ημερομηνία", datetime.now(), key="week_date")
-    target_date = datetime.combine(selected_date, datetime.min.time())
-    start_week, end_week = get_week_range(target_date)
-    
-    st.markdown(f"**Περίοδος:** {start_week.strftime('%d/%m/%Y')} έως {end_week.strftime('%d/%m/%Y')}")
+tab1, tab2 = st.tabs(["📅 Εβδομαδιαία Εικόνα", "📆 Μηνιαία Εικόνα"])
 
-    if df.empty:
-        st.warning("⚠️ Δεν υπάρχουν καθόλου δεδομένα στη μνήμη. Δοκίμασε να πατήσεις 'Ανανέωση Δεδομένων'.")
-    else:
-        mask_week = (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'] >= start_week) & (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'] <= end_week)
-        weekly_df = df.loc[mask_week]
-
-        if weekly_df.empty:
-            st.info("Δεν βρέθηκαν παραστατικά για τη συγκεκριμένη εβδομάδα. Επίλεξε άλλη ημερομηνία.")
-        else:
-            invoices = weekly_df[~weekly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            credits = weekly_df[weekly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Τιμολόγια", f"{invoices:.2f} €")
-            c2.metric("Πιστωτικά", f"-{credits:.2f} €")
-            c3.metric("ΚΑΘΑΡΟ ΣΥΝΟΛΟ", f"{(invoices - credits):.2f} €", delta_color="normal")
-            
-            st.write("---")
-            st.dataframe(weekly_df[['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']].style.format({"ΣΥΝΟΛΙΚΗ ΑΞΙΑ": "{:.2f} €"}), use_container_width=True, hide_index=True)
-
-# --- ΚΑΡΤΕΛΑ 2: ΜΗΝΑΣ ---
-with tab_month:
-    st.subheader("Συγκεντρωτικά Μήνα")
-    
-    col_m1, col_m2 = st.columns(2)
-    months = ["Ιανουάριος", "Φεβρουάριος", "Μάρτιος", "Απρίλιος", "Μάιος", "Ιούνιος", "Ιούλιος", "Αύγουστος", "Σεπτέμβριος", "Οκτώβριος", "Νοέμβριος", "Δεκέμβριος"]
-    current_month = datetime.now().month
-    current_year = datetime.now().year
-    
-    with col_m1:
-        sel_month_name = st.selectbox("Μήνας", months, index=current_month-1)
-        sel_month = months.index(sel_month_name) + 1
-    
-    with col_m2:
-        if df.empty:
-            available_years = [current_year]
-        else:
-            available_years = df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.year.dropna().unique()
-            if current_year not in available_years: 
-                available_years = list(available_years) + [current_year]
-        sel_year = st.selectbox("Έτος", sorted(available_years, reverse=True))
+with tab1:
+    sel_date = st.date_input("Επίλεξε ημέρα για την εβδομάδα:", datetime.now())
+    start, end = get_week_range(datetime.combine(sel_date, datetime.min.time()))
+    st.info(f"Περίοδος: {start.strftime('%d/%m/%Y')} έως {end.strftime('%d/%m/%Y')}")
 
     if not df.empty:
-        mask_month = (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.month == sel_month) & (df['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ'].dt.year == sel_year)
-        monthly_df = df.loc[mask_month]
-
-        if monthly_df.empty:
-            st.info(f"Δεν υπάρχουν δεδομένα για {sel_month_name} {sel_year}.")
-        else:
-            invoices_m = monthly_df[~monthly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
-            credits_m = monthly_df[monthly_df['ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['ΣΥΝΟΛΙΚΗ ΑΞΙΑ'].sum()
+        mask = (df['DATE'] >= start) & (df['DATE'] <= end)
+        w_df = df.loc[mask]
+        
+        if not w_df.empty:
+            inv = w_df[~w_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
+            crd = w_df[w_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
             
             c1, c2, c3 = st.columns(3)
-            c1.metric("Τιμολόγια", f"{invoices_m:.2f} €")
-            c2.metric("Πιστωτικά", f"-{credits_m:.2f} €")
-            c3.metric("ΣΥΝΟΛΟ ΜΗΝΑ", f"{(invoices_m - credits_m):.2f} €", delta_color="normal")
+            c1.metric("Τιμολόγια", f"{inv:.2f} €")
+            c2.metric("Πιστωτικά", f"-{crd:.2f} €")
+            c3.metric("ΚΑΘΑΡΟ", f"{(inv - crd):.2f} €")
             
-            st.write("---")
-            csv = monthly_df[['ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ', 'ΣΥΝΟΛΙΚΗ ΑΞΙΑ']].to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 Κατέβασμα Μήνα σε CSV",
-                data=csv,
-                file_name=f"invoices_{sel_month}_{sel_year}.csv",
-                mime="text/csv",
-            )
+            st.dataframe(w_df.rename(columns={'DATE':'ΗΜΕΡΟΜΗΝΙΑ', 'TYPE':'ΤΥΠΟΣ', 'VALUE':'ΑΞΙΑ'}), use_container_width=True, hide_index=True)
+        else:
+            st.write("Δεν υπάρχουν εγγραφές για αυτή την εβδομάδα.")
+
+with tab2:
+    if not df.empty:
+        m_list = ["Ιαν", "Φεβ", "Μαρ", "Απρ", "Μαι", "Ιουν", "Ιουλ", "Αυγ", "Σεπ", "Οκτ", "Νοε", "Δεκ"]
+        col_a, col_b = st.columns(2)
+        with col_a: s_m = st.selectbox("Μήνας", range(1, 13), format_func=lambda x: m_list[x-1], index=datetime.now().month-1)
+        with col_b: s_y = st.selectbox("Έτος", sorted(df['DATE'].dt.year.unique(), reverse=True))
+        
+        mask_m = (df['DATE'].dt.month == s_m) & (df['DATE'].dt.year == s_y)
+        m_df = df.loc[mask_m]
+        
+        if not m_df.empty:
+            inv_m = m_df[~m_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
+            crd_m = m_df[m_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
+            
+            st.divider()
+            st.metric("ΣΥΝΟΛΟ ΜΗΝΑ (ΚΑΘΑΡΟ)", f"{(inv_m - crd_m):.2f} €")
+            
+            csv = m_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button("📥 Κατέβασμα Μήνα (CSV)", csv, f"month_{s_m}_{s_y}.csv", "text/csv")
+        else:
+            st.write("Δεν υπάρχουν εγγραφές για αυτόν τον μήνα.")
