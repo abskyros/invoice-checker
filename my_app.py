@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 # --- ΡΥΘΜΙΣΕΙΣ ---
 EMAIL_USER = "abf.skyros@gmail.com"
 EMAIL_PASS = st.secrets["EMAIL_PASS"] 
-SENDER_DOMAIN = "wedoconnect.com" # Πιο ευρύ φίλτρο για να μην χάνουμε email
+SENDER_EMAIL = "Notifications@WeDoConnect.com" # Επαναφορά στο ακριβές email για σίγουρη αναζήτηση
 
 st.set_page_config(page_title="Έλεγχος Τιμολογίων", layout="centered", page_icon="📊")
 
@@ -52,8 +52,8 @@ def load_data():
     
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            # Ψάχνουμε τα τελευταία 100 emails από το wedoconnect
-            for msg in mailbox.fetch(AND(from_=SENDER_DOMAIN), limit=100, reverse=True):
+            # Ψάχνουμε τα τελευταία 100 emails με βάση το ακριβές email
+            for msg in mailbox.fetch(AND(from_=SENDER_EMAIL), limit=100, reverse=True):
                 for att in msg.attachments:
                     if att.filename.endswith(('.xlsx', '.csv', '.xls')):
                         df = find_header_and_load(att.payload, is_excel=not att.filename.endswith('.csv'))
@@ -74,7 +74,7 @@ def load_data():
                                 df_clean[col_date] = pd.to_datetime(df_clean[col_date], errors='coerce')
                                 df_clean = df_clean.dropna(subset=[col_date])
                                 
-                                # Μετατροπή Ποσού (Αφαίρεση ευρώ, μετατροπή κόμματος σε τελεία)
+                                # Μετατροπή Ποσού
                                 if df_clean[col_value].dtype == object:
                                     df_clean[col_value] = df_clean[col_value].astype(str).str.replace('€', '').str.replace(',', '.').str.strip()
                                 df_clean[col_value] = pd.to_numeric(df_clean[col_value], errors='coerce').fillna(0)
@@ -98,7 +98,6 @@ with col2:
     if st.button("🔄 Ανανέωση Δεδομένων", use_container_width=True):
         st.cache_data.clear()
 
-# Πάντα δείχνουμε τις καρτέλες, άσχετα αν υπάρχουν δεδομένα
 tab_week, tab_month = st.tabs(["📅 Ανά Εβδομάδα", "📆 Ανά Μήνα"])
 
 df = load_data()
